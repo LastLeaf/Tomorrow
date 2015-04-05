@@ -15,6 +15,13 @@ var LIGHTS_SPEED = [2,2.5,3,3.5];
 var P_STATE_CHANGE = [0.025, 0.03, 0.035, 0.04];
 var ME_MOVE_SPEED = 3;
 var ME_ACTION_SPEED = 6; // no larger than 6
+var ME_SLOW_RATE = 0.5;  // slow_speed = slow_rate * normal_speed
+var ME_S_R = 12;          // radius of my shadow
+var ME_S_DES_PER_FRAME = 0.003;
+var ME_S_START_ALPHA = 0.096;   // alpha when the shadow appear
+var FOG_R = 100;
+var FLASH_ALPHA_MIN = 0.0;
+var FLASH_ALPHA_MAX = 0.1;
 var ME_ACTION_DAMAGE = 4;
 var ME_ACTION_DIF = Math.PI/8;
 var ME_DAMAGE_PER_R = 1;
@@ -28,19 +35,12 @@ var parseMap = function(level){
 	map.startY = a[2]*6;
 	var endX = a[3].split(' ');
 	var endY = a[4].split(' ');
-	var i = Math.floor( Math.random() * endX.length );
-	map.endX = endX[i]*6;
-	map.endY = endY[i]*6;
-	// special controls
-	map.showEnd = false;
-	if(endY[endX.length] === 'S' || endY[endX.length] === 'SW')
-		map.showEnd = true;
-	map.alwaysShowEnd = false;
-	if(endY[endX.length] === 'A')
-		map.alwaysShowEnd = true;
-	map.white = false;
-	if(endY[endX.length] === 'W' || endY[endX.length] === 'SW')
-		map.white = true;
+	for(var i=0; i<endX.length; i++) {
+		endX[i] *= 6;
+		endY[i] *= 6;
+	}
+	map.endX = endX;
+	map.endY = endY;
 	// parse lights
 	map.lights = [];
 	var s = a[5].split(' ');
@@ -71,7 +71,11 @@ var parseMap = function(level){
 			sizeState: 0
 		});
 	}
+	// black background
+	var mapBackground = new createjs.Shape();
+	mapBackground.graphics.f('black').r(0, 0, WIDTH, HEIGHT);
 	// draw map
+	var blur = Number(a[6]);
 	var s = a[0];
 	var block = new Array(90*160);
 	var picture = new createjs.Shape();
@@ -86,13 +90,46 @@ var parseMap = function(level){
 				g.r((p%160)*6, Math.floor(p/160)*6, 6, 6);
 		}
 	}
-	picture.filters = [ new createjs.BoxBlurFilter(12,12,1) ];
-	if(!map.white)
-		picture.cache(0,0,WIDTH,HEIGHT);
-	else
-		picture.cache(24,24,WIDTH-48,HEIGHT-48)
+	picture.filters = [ new createjs.BoxBlurFilter(6*blur+2,6*blur+2,1) ];
 	map.block = block;
-	map.picture = picture;
+	map.picture = new createjs.Container().set({x:0,y:0});
+	map.picture.addChild(mapBackground);
+	map.picture.addChild(picture);
+	// add image above if needed
+	if(game.ctrl[level].bgimage) {
+		var img = new createjs.Bitmap( game.mainResource.getResult('img' + game.ctrl[level].bgimage) );
+		map.picture.addChild(img);
+	}
+	picture.cache(0,0,WIDTH,HEIGHT);
+	// calculate wall
+	var wall = new Array(90*160);
+	for(var i=0; i<90; i++)
+		for(var j=0; j<160; j++) {
+			if(!block[i*160+j])
+				wall[i*160+j] = 0; // center can reach
+			else {
+				wall[i*160+j] = 2; // nothing can reach
+				if(blur === 1) {
+					for(var di=-1; di<=1; di++)
+						for(var dj=-1; dj<=1; dj++) {
+							if(i+di<0 || i+di>=90 || j+dj<0 || j+dj>=160) continue;
+							if(block[(i+di)*160+(j+dj)]) continue;
+							wall[i*160+j] = 1; // border can reach
+							break;
+						}
+				} else if(blur === 2) {
+					for(var di=-2; di<=2; di++)
+						for(var dj=-2; dj<=2; dj++) {
+							if(i+di<0 || i+di>=90 || j+dj<0 || j+dj>=160) continue;
+							if(block[(i+di)*160+(j+dj)]) continue;
+							wall[i*160+j] = 1; // border can reach
+							break;
+						}
+				}
+			}
+		}
+	map.blur = blur;
+	map.wall = wall;
 	return map;
 };
 
@@ -222,7 +259,7 @@ var startLevel = function(level){
 	}
 
 	// switch music
-	if(game.curMusic !== game.words[level].chapter) {
+	if(game.curMusic !== game.ctrl[level].bgm) {
 		var curVol = 1;
 		var volDown = function(){
 			curVol -= 0.04;
@@ -230,20 +267,8 @@ var startLevel = function(level){
 				curVol = 0;
 				// switch music
 				createjs.Sound.stop();
-				game.curMusic = game.words[level].chapter;
-				switch(game.curMusic) {
-					case 1:
-						createjs.Sound.play('bgm1', createjs.Sound.INTERRUPT_ANY, 0, 0, -1);
-						break;
-					case 2:
-						createjs.Sound.play('bgm2', createjs.Sound.INTERRUPT_ANY, 0, 0, -1);
-						break;
-					case 3:
-						createjs.Sound.play('bgm3', createjs.Sound.INTERRUPT_ANY, 0, 0, -1);
-						break;
-					default:
-						createjs.Sound.play('bgm4', createjs.Sound.INTERRUPT_ANY, 0, 0, -1);
-				}
+				game.curMusic = game.ctrl[level].bgm || 0;
+				createjs.Sound.play('bgm' + game.curMusic, createjs.Sound.INTERRUPT_ANY, 0, 0, -1);
 				createjs.Ticker.removeEventListener('tick', volDown);
 				createjs.Ticker.addEventListener('tick', volUp);
 				storyLoopStart();
@@ -271,10 +296,13 @@ var startLevel = function(level){
 		}, 1000);
 	}
 
+	var controlConfig = game.ctrl[level];
+
 	// story loop
 	var storyLoopStart = function(){
 		// show level words
 		var story = game.words[level].story;
+		if(story.constructor !== Array) story = [story];
 		var storyText = new createjs.Text();
 		storyText.textAlign = 'center';
 		storyText.textBaseline = 'middle';
@@ -288,8 +316,8 @@ var startLevel = function(level){
 		var isFadeIn = true;
 		var FADE_ALPHA_MIN = -1;
 		var FADE_ALPHA_STEP = 0.04;
-		var FADE_ALPHA_MAX_STD = 1.25;
-		var FADE_ALPHA_MAX_PER_CHAR = 0.05;
+		var FADE_ALPHA_MAX_STD = 1;
+		var FADE_ALPHA_MAX_PER_CHAR = 0.04;
 		storyContainer.alpha = -1;
 		var fadeAlphaMax = 1;
 		userCtrl.skip = false;
@@ -329,7 +357,7 @@ var startLevel = function(level){
 							storyText.lineHeight = 36;
 							storyText.color = '#c0c0c0';
 							storyText.text = story[i].slice(8);
-							storyText.cache(-480, -60, 960, 120);
+							storyText.cache(-480, -60, 960, 240);
 							fadeAlphaMax = storyTime(story[i])*0.7;
 							storyContainer.addChild(storyText);
 						} else if(story[i].slice(0,5) === '!her:') {
@@ -426,7 +454,7 @@ var startLevel = function(level){
 
 		// init
 		var meHpMax = ME_HP_MAX[game.settings.difficulty];
-		var meHp = meHpMax;
+		var meHp = game.ctrl[level].hp || meHpMax;
 		var map = parseMap(level);
 		var mePicture = null;
 		if(map.white)
@@ -624,33 +652,89 @@ var startLevel = function(level){
 			userCtrl.reset = false;
 		});
 
+		// reach an end point
+		var levelEndIndex = 0;
+		var levelEndpoint = function(){
+			var textInfo = game.words[level].ends[levelEndIndex++];
+			if(textInfo) {
+				// show text in map
+				var text = new createjs.Text();
+				text.font = '24px'+game.lang.font;
+				text.lineHeight = 36;
+				text.color = '#c0c0c0';
+				text.text = textInfo[0];
+				text.textAlign = textInfo[3] || 'center';
+				text.textBaseline = 'middle';
+				text.x = textInfo[1] || 480;
+				text.y = textInfo[2] || 270;
+				text.filters = [ new createjs.BoxBlurFilter(0.5,0.5,1) ];
+				if(textInfo[3] === 'left')
+					text.cache(0, -20, 960, 40);
+				else if(textInfo[3] === 'center')
+					text.cache(-480, -20, 960, 40);
+				else if(textInfo[3] === 'right')
+					text.cache(-960, -20, 960, 40);
+				mapTextLayer.removeAllChildren();
+				mapTextLayer.addChild(text);
+				text.alpha = 0;
+				var fadeInStep = function(){
+					text.alpha += 0.03;
+					if(text.alpha >= 1) createjs.Ticker.removeEventListener('tick', fadeInStep);
+				};
+				createjs.Ticker.addEventListener('tick', fadeInStep);
+				if(!map.endX.length) {
+					// end level in several seconds
+					var waitTicks = 128;
+					createjs.Ticker.addEventListener('tick', function(){
+						waitTicks--;
+						if(!waitTicks) doneLevel();
+					});
+				}
+			} else if(!map.endX.length) {
+				doneLevel();
+			}
+		};
+
 		// calc hp
+		var lightHurt = game.ctrl[level].lightHurt;
+		if(typeof(lightHurt) === 'undefined') lightHurt = 1;
 		createjs.Ticker.addEventListener('tick', function(){
 			if(userCtrl.paused) return;
-			if(userCtrl.action && level > 1) meHp -= ME_ACTION_DAMAGE;
-			for(var i=0; i<lights.length; i++) {
+			if(running && level > 1) meHp -= ME_ACTION_DAMAGE;
+			for(var i=0; !controlConfig.noRun && i<lights.length; i++) {
 				var a = lights[i];
 				var dx = a.x - mePicture.x;
 				var dy = a.y - mePicture.y;
 				var d = Math.sqrt(dx*dx + dy*dy) - ME_R;
 				if(d <= a.r) {
 					if(a.r-d > ME_R*2)
-						meHp -= ME_R*2*ME_DAMAGE_PER_R;
+						meHp -= ME_R*2*ME_DAMAGE_PER_R*lightHurt;
 					else
-						meHp -= (a.r-d)*ME_DAMAGE_PER_R;
+						meHp -= (a.r-d)*ME_DAMAGE_PER_R*lightHurt;
 				}
 			}
-			if(meHp <= 0) resetLevel();
+			if(meHp <= 0) {
+				if(game.ctrl[level].diePass) doneLevel();
+				else resetLevel();
+			}
 			// check end
-			var dx = map.endX - mePicture.x;
-			var dy = map.endY - mePicture.y;
-			if( dx*dx + dy*dy <= 4*ME_R*ME_R )
-				doneLevel();
+			var dx = map.endX[0] - mePicture.x;
+			var dy = map.endY[0] - mePicture.y;
+			if( dx*dx + dy*dy <= 4*ME_R*ME_R ) {
+				map.endX.shift();
+				map.endY.shift();
+				levelEndpoint();
+			}
 		});
 
 		// handling moves
 		var actionAni = false;
+		var shadowList = [];
+		var running = false;
+		var prevCtrlX = 0;
+		var prevCtrlY = 0;
 		createjs.Ticker.addEventListener('tick', function(){
+			running = false;
 			if(userCtrl.paused) return;
 			// move
 			var x = 0;
@@ -659,8 +743,19 @@ var startLevel = function(level){
 			if(userCtrl.down) y++;
 			if(userCtrl.left) x--;
 			if(userCtrl.right) x++;
-			if(userCtrl.action && level > 1) {
-				// allow run from level 2
+			if (controlConfig.onlyRight) {
+				if(x < 0) x = 0;
+				y = 0;
+			}
+			if (controlConfig.noStop && !x && !y) {
+				x = prevCtrlX;
+				y = prevCtrlY;
+			} else if(controlConfig.noStop) {
+				prevCtrlX = x;
+				prevCtrlY = y;
+			}
+			if(controlConfig.mustRun || (userCtrl.action && !controlConfig.noRun)) {
+				// allow run when `ctrl.noRun` is false
 				if(!actionAni) {
 					actionAni = true;
 					mePicture.gotoAndPlay('fast');
@@ -676,6 +771,7 @@ var startLevel = function(level){
 					p += Math.random()*ME_ACTION_DIF*2 - ME_ACTION_DIF;
 					x = ME_ACTION_SPEED * Math.cos(p);
 					y = ME_ACTION_SPEED * Math.sin(p);
+					running = true;
 				}
 			} else {
 				// standard move
@@ -690,13 +786,22 @@ var startLevel = function(level){
 					y /= 1.4142136;
 				}
 			}
+			if (controlConfig.slow) {
+				x *= ME_SLOW_RATE;
+				y *= ME_SLOW_RATE;
+			}
 			// check walls
 			if(x || y) {
 				var px = mePicture.x + x;
 				var py = mePicture.y + y;
 				var checkWall = function(x, y){
 					if(x < ME_R || y < ME_R || x >= WIDTH-ME_R || y >= HEIGHT-ME_R) return true;
-					return map.block[ Math.floor(x/6) + Math.floor(y/6)*160 ];
+					if( map.wall[ Math.floor((x-12)/6) + Math.floor((y-12)/6)*160 ] > 1 ) return true;
+					if( map.wall[ Math.floor((x+12)/6) + Math.floor((y-12)/6)*160 ] > 1 ) return true;
+					if( map.wall[ Math.floor((x+12)/6) + Math.floor((y+12)/6)*160 ] > 1 ) return true;
+					if( map.wall[ Math.floor((x-12)/6) + Math.floor((y+12)/6)*160 ] > 1 ) return true;
+					if( map.wall[ Math.floor(x/6) + Math.floor(y/6)*160 ] ) return true;
+					return false;
 				};
 				if(checkWall(px, py)) {
 					if(!checkWall(mePicture.x + x, mePicture.y)) {
@@ -712,42 +817,83 @@ var startLevel = function(level){
 						else if(y < 0) py = (Math.floor(py/6)+1)*6;
 					}
 				}
-				mePicture.x = px;
-				mePicture.y = py;
+				if (px - mePicture.x || py - mePicture.y) {
+					mePicture.x = px;
+					mePicture.y = py;
+					// add person's shadow
+					if (controlConfig.shadow) {
+						var shadow = new createjs.Shape();
+						shadow.graphics.f('#808080').dc(mePicture.x, mePicture.y, ME_S_R);
+						shadow.alpha = ME_S_START_ALPHA;
+						shadowList.push(shadow);
+						meShadow.addChild(shadow);
+					}
+					if (controlConfig.fog) {
+						fog.x = px;
+						fog.y = py;
+					}
+				}
+			}
+			// check the shadow
+			if (controlConfig.shadow) {
+				for (var si = 0, sl = shadowList.length; si < sl; si++) {
+					shadowList[si].alpha -= ME_S_DES_PER_FRAME;
+				}
+			}
+			var oldestShadow = shadowList[0];
+			if (oldestShadow && oldestShadow.alpha <= 0) {
+				meShadow.removeChild(oldestShadow);
+				shadowList.shift();
 			}
 		});
 
-		// show me and map
-		if(map.white) {
-			game.stage.addChild(map.picture);
-			game.stage.addChild(whiteMap);
-		}
+		// show map
+		game.stage.addChild(map.picture);
+
+		// show me
 		game.stage.addChild(mePicture);
 		mePicture.x = map.startX;
 		mePicture.y = map.startY;
 		mePicture.gotoAndPlay('normal');
-		if(!map.white)
-			game.stage.addChild(map.picture);
+		if (controlConfig.shadow) {
+			var meShadow = new createjs.Container();
+			game.stage.addChild(meShadow);
+		}
 
-		// show end if needed
-		if(map.showEnd || map.alwaysShowEnd) {
-			var endPicture = generatePerson('#FBB7BF');
-			game.stage.addChild(endPicture);
-			endPicture.x = map.endX;
-			endPicture.y = map.endY;
-				endPicture.gotoAndPlay('normal');
-			if(map.showEnd) {
-				endPicture.alpha = 4;
-				var endAni = function(){
-					if(userCtrl.paused) return;
-					endPicture.alpha -= 0.02;
-					if(endPicture.alpha <= 0) {
-						createjs.Ticker.removeEventListener('tick', endAni);
-						game.stage.removeChild(endPicture);
-					}
-				};
-				createjs.Ticker.addEventListener('tick', endAni);
-			}
+		// add a fog layer
+		if (controlConfig.fog) {
+			var fog = new createjs.Shape();
+			fog.graphics.f('white').dc(0, 0, FOG_R-8);
+			fog.filters = [ new createjs.BoxBlurFilter(8,8,1) ];
+			fog.cache(-FOG_R, -FOG_R, 2*FOG_R, 2*FOG_R);
+			fog.compositeOperation = 'destination-in';
+			fog.x = mePicture.x;
+			fog.y = mePicture.y;
+			var fogBackground = new createjs.Shape();
+			fogBackground.graphics.f('rgb(128,128,128)').r(8, 8, WIDTH-16, HEIGHT-16);
+			fogBackground.filters = [ new createjs.BoxBlurFilter(8,8,1) ];
+			fogBackground.cache(0, 0, WIDTH, HEIGHT);
+			fogBackground.compositeOperation = 'destination-over';
+			game.stage.addChild(fog);
+			game.stage.addChild(fogBackground);
+		}
+
+		// add flash layer
+		if (controlConfig.flash) {
+			var flash = new createjs.Shape().set({alpha: FLASH_ALPHA_MAX});;
+			flash.graphics.f('black').dr(0, 0, WIDTH, HEIGHT);
+			game.stage.addChild(flash);
+			var sp = -0.01;
+			createjs.Ticker.addEventListener('tick', function() {
+				if(userCtrl.paused) return;
+				flash.alpha += sp;
+				if (flash.alpha >= FLASH_ALPHA_MAX) {
+					sp = -0.01 * (0.5 + Math.random());
+				}
+				if (flash.alpha <= FLASH_ALPHA_MIN) {
+					sp  = 0.01 * (0.5 + Math.random());
+				}
+			});
 		}
 
 		// update lights
@@ -809,6 +955,10 @@ var startLevel = function(level){
 			}
 		});
 
+		// add a layer for texts above map
+		var mapTextLayer = new createjs.Container().set({x:0,y:0});
+		game.stage.addChild(mapTextLayer);
+
 		// show clouds
 		if(!MOBILE)
 			cloudsStart();
@@ -823,13 +973,15 @@ var startLevel = function(level){
 			hpOutline.graphics.ss(1).s('#fff').f('black').r(0,0,8,100);
 			hpOutline.cache(0,0,8,100);
 			var hpShape = new createjs.Shape();
-			hpShape.graphics.f('#fff').r(0,0,8,100);
+			var h = 100*meHp/meHpMax;
+			hpShape.graphics.f('#fff').r(0,100-h,8,h);
 			var hpPicture = new createjs.Container().set({x:50, y:50, alpha:0.3});
 			if(map.white) whiteMap.alpha = 1.3 - hpPicture.alpha;
 			hpPicture.addChild(hpBackground);
 			hpPicture.addChild(hpOutline);
 			hpPicture.addChild(hpShape);
 			game.stage.addChild(hpPicture);
+			if(controlConfig.noRun) hpPicture.alpha = 0;
 			var meHpOri = meHp;
 			var hpShapeAni = 0;
 			var HP_SHAPE_ANI_SPEED = 0.03;

@@ -87,8 +87,10 @@ game.showCover = function(){
 	);
 	lastleafLink.getChildAt(1).alpha = 0.8;
 	lastleafLink.getChildAt(2).visible = false;
-	lastleafLink.x = -370;
-	lastleafLink.y = -26;
+	lastleafLink.x = 280;
+	lastleafLink.y = -15;
+	lastleafLink.scaleX = 0.6;
+	lastleafLink.scaleY = 0.6;
 	lastleafLink.addEventListener('mouseover', function(){
 		lastleafLink.getChildAt(2).visible = true;
 		lastleafLink.getChildAt(1).visible = false;
@@ -99,27 +101,21 @@ game.showCover = function(){
 	});
 	lastleafLink.addEventListener('click', function(){
 		if(location.protocol !== 'resource:')
-			window.open('http://lastleaf.mistymiracle.org/');
+			window.open('http://lastleaf.me/');
 	});
 	bottomBar.addChild(lastleafLink);
 
 	// show license link
-	if(PLATFORM === 'kongregate') {
-		var licenseLink = game.createTextButton('KONGREGATE', 16, '#000', 260, 0, function(){
-			window.open('http://www.kongregate.com/');
-		});
-	} else {
-		var licenseLink = game.createTextButton(game.str[3], 16, '#000', 270, 0, function(){
-			if(location.protocol !== 'resource:')
-				window.open('license_'+game.settings.lang+'.html');
-			else
-				location.href = 'license_'+game.settings.lang+'.html?showback';
-		});
-	}
+	var licenseLink = game.createTextButton(game.str[3], 18, '#000', -320, 0, function(){
+		if(location.protocol !== 'resource:')
+			window.open('license_'+game.settings.lang+'.html');
+		else
+			location.href = 'license_'+game.settings.lang+'.html?showback';
+	});
 	bottomBar.addChild(licenseLink);
 
 	// show about link
-	var aboutLink = game.createTextButton('v1.0.0', 16, '#000', 350, 0, function(){
+	var aboutLink = game.createTextButton('CREDIT', 18, '#000', -200, 0, function(){
 		if(location.protocol !== 'resource:')
 			window.open('change_logs.html');
 		else
@@ -128,9 +124,9 @@ game.showCover = function(){
 	bottomBar.addChild(aboutLink);
 
 	// show subtitle
-	var subtitle = game.createTextButton(game.str[4], 16, '#000', 0, 0, function(){
+	var subtitle = game.createTextButton(game.str[4], 18, '#000', 160, 0, function(){
 		if(location.protocol !== 'resource:')
-			window.open('http://blog.programet.org/2010/04/%E6%98%8E%E5%A4%A9.html');
+			window.open('http://github.com/LastLeaf/Tomorrow');
 	});
 	bottomBar.addChild(subtitle);
 
@@ -207,6 +203,7 @@ game.showCover = function(){
 		if(location.protocol !== 'file:' && location.protocol !== 'resource:') {
 			game.maps = q.getResult('maps').split('\n');
 			game.words = q.getResult('words');
+			game.ctrl = q.getResult('ctrl');
 		}
 		// show language link
 		var switchLang = function(newLang){
@@ -387,6 +384,7 @@ game.showCover = function(){
 			} else if(e.keyCode === 82) {
 				if(confirm(game.str[21])) {
 					delete localStorage[STORAGE_ID];
+					game.settings = DEFAULT_SETTINGS;
 					game.stage.removeAllChildren();
 					createjs.Ticker.removeAllEventListeners('tick');
 					window.removeEventListener('keyup', coverKeyFunc);
@@ -403,7 +401,7 @@ game.showCover = function(){
 	if(game.mainResource) {
 		resourceLoaded({target: game.mainResource});
 	} else {
-		var q = new createjs.LoadQueue(USE_ADVANCED_LOADING, 'data/');
+		var q =  new createjs.LoadQueue(USE_ADVANCED_LOADING, 'data/');
 		q.installPlugin(createjs.Sound);
 		q.addEventListener('progress', function(e){
 			progress.c().f('#888').r(0, 0, e.progress*800, 3);
@@ -413,12 +411,21 @@ game.showCover = function(){
 			// advanced loading
 			q.loadManifest([
 				{id:'maps', type:'text', src:'maps.data?v='+VERSION},
+				{id:'ctrl', src:'ctrl.json?v='+VERSION},
 				{id:'words', src:'words_'+game.settings.lang+'.json?v='+VERSION},
 				{id:'bgm1', src:'audio/the_start_of_night.ogg|audio/the_start_of_night.mp3'},
-				{id:'bgm2', src:'audio/tomorrow.ogg|audio/tomorrow.mp3'},
-				{id:'bgm3', src:'audio/spreading_white.ogg|audio/spreading_white.mp3'},
-				{id:'bgm4', src:'audio/tomorrow_short.ogg|audio/tomorrow_short.mp3'},
+				{id:'bgm2', src:'audio/lighted_stories.ogg|audio/lighted_stories.mp3'},
+				{id:'bgm3', src:'audio/tomorrow.ogg|audio/tomorrow.mp3'},
+				{id:'bgm4', src:'audio/spreading_white.ogg|audio/spreading_white.mp3'},
+				{id:'bgm5', src:'audio/lighted_stories_strings.ogg|audio/lighted_stories_strings.mp3'},
+				{id:'bgm0', src:'audio/tomorrow_short.ogg|audio/tomorrow_short.mp3'},
 				{id:'tomorrow', src:'image/title_'+game.settings.lang+'.png'},
+				{id:'img6', src:'image/6.png'},
+				{id:'img7', src:'image/7.png'},
+				{id:'img8', src:'image/8.png'},
+				{id:'img9', src:'image/9.png'},
+				{id:'img10', src:'image/10.png'},
+				{id:'img22', src:'image/22.png'},
 				{src:'js/levels.js?v='+VERSION}
 			]);
 		} else {
@@ -437,13 +444,28 @@ game.showCover = function(){
 			xhr2.open('GET', 'data/words_'+game.settings.lang+'.json', false);
 			xhr2.overrideMimeType('text/plain; charset=utf8');
 			xhr2.send();
+			var xhr3 = new XMLHttpRequest();
+			xhr3.addEventListener('load', function(){
+				game.ctrl = JSON.parse(xhr3.response);
+			}, false);
+			xhr3.open('GET', 'data/ctrl.json', false);
+			xhr3.overrideMimeType('text/plain; charset=utf8');
+			xhr3.send();
 			// load else
 			q.loadManifest([
 				{id:'bgm1', src:'audio/the_start_of_night.ogg|audio/the_start_of_night.mp3'},
-				{id:'bgm2', src:'audio/tomorrow.ogg|audio/tomorrow.mp3'},
-				{id:'bgm3', src:'audio/spreading_white.ogg|audio/spreading_white.mp3'},
-				{id:'bgm4', src:'audio/tomorrow_short.ogg|audio/tomorrow_short.mp3'},
+				{id:'bgm2', src:'audio/lighted_stories.ogg|audio/lighted_stories.mp3'},
+				{id:'bgm3', src:'audio/tomorrow.ogg|audio/tomorrow.mp3'},
+				{id:'bgm4', src:'audio/spreading_white.ogg|audio/spreading_white.mp3'},
+				{id:'bgm5', src:'audio/lighted_stories_strings.ogg|audio/lighted_stories_strings.mp3'},
+				{id:'bgm0', src:'audio/tomorrow_short.ogg|audio/tomorrow_short.mp3'},
 				{id:'tomorrow', src:'image/title_'+game.settings.lang+'.png'},
+				{id:'img6', src:'image/6.png'},
+				{id:'img7', src:'image/7.png'},
+				{id:'img8', src:'image/8.png'},
+				{id:'img9', src:'image/9.png'},
+				{id:'img10', src:'image/10.png'},
+				{id:'img22', src:'image/22.png'},
 				{src:'js/levels.js'}
 			]);
 		}
